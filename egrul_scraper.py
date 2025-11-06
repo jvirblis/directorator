@@ -15,7 +15,6 @@ from selenium.common.exceptions import ElementClickInterceptedException, NoSuchE
 
 
 class InfiniteIter:
-    """Itérateur infini pour numéroter les lignes."""
     def __iter__(self):
         self.num = 1
         return self
@@ -27,12 +26,11 @@ class InfiniteIter:
 
 
 def pause(min_sec=2.0, add_sec=5.0):
-    """Pause l'exécution pour un temps aléatoire entre 2 et 7 secondes."""
+    """Random timeout to avoid blocking by the service, work well this timeout at 1500 records required"""
     time.sleep(random.uniform(min_sec, min_sec + add_sec))
 
 
 def create_driver(chrome_options, chromedriver_path=None):
-    """Crée une nouvelle instance du driver Chrome."""
     try:
         if chromedriver_path:
             service = Service(executable_path=chromedriver_path)
@@ -44,19 +42,19 @@ def create_driver(chrome_options, chromedriver_path=None):
         driver.implicitly_wait(1)  # Attente implicite réduite
         return driver
     except Exception as e:
-        print(f"Erreur lors de la création du driver: {str(e)}")
+        print(f"Error in creation driver: {str(e)}")
         return None
 
 
 def ensure_driver_alive(driver, chrome_options, chromedriver_path=None):
-    """Vérifie si le driver est toujours actif, sinon le recrée."""
+    """Check if the driver is still active, if not reactivate"""
     try:
         # Test simple pour vérifier si le driver fonctionne
         driver.current_url
         return driver
     except Exception as e:
-        print(f"Driver inactif détecté: {str(e)}")
-        print("Création d'un nouveau driver...")
+        print(f"Inactive driver detected: {str(e)}")
+        print("New driver start...")
         try:
             driver.quit()
         except:
@@ -68,12 +66,12 @@ def ensure_driver_alive(driver, chrome_options, chromedriver_path=None):
                 new_driver.get("https://egrul.nalog.ru/index.html")
                 pause(min_sec=1.0, add_sec=2.0)  # Pause plus courte pour le rechargement
             except Exception as e:
-                print(f"Erreur lors du chargement de la page: {str(e)}")
+                print(f"Error loading the page: {str(e)}")
         return new_driver
 
 
 def get_pdf(driver, search_query, min_sec=2.0, max_retries=2):
-    """Recherche et télécharge un PDF en utilisant le terme de recherche fourni."""
+    """Searcha and download the  PDF."""
     retries = 0
     while retries <= max_retries:
         try:
@@ -82,22 +80,22 @@ def get_pdf(driver, search_query, min_sec=2.0, max_retries=2):
             search.send_keys(search_query)
             search_button = driver.find_element(By.ID, "btnSearch")
             search_button.click()
-            pause(min_sec=min_sec, add_sec=3.0)  # Pause plus courte après recherche
+            pause(min_sec=min_sec, add_sec=2.0)  # short timeout after search
 
             all_results = driver.find_elements(By.CLASS_NAME, "res-row")
             if not all_results:
-                print(f"Aucun résultat trouvé pour: {search_query}")
+                print(f"Nothing found for: {search_query}")
                 return False
             
             # Utilise seulement le premier élément de la recherche
             first_result_button = all_results[0].find_element(By.TAG_NAME, "button")
             first_result_button.click()
-            pause(min_sec=1.0, add_sec=2.0)  # Pause courte après clic
+            pause(min_sec=1.0, add_sec=1.0)  # Short pause after clic
             return True
             
         except NoSuchElementException:
             if retries < max_retries:
-                print(f"Éléments introuvables pour: {search_query}, essai {retries+1}/{max_retries+1}")
+                print(f"Elements not found for: {search_query}, try {retries+1}/{max_retries+1}")
                 try:
                     driver.refresh()
                     pause(min_sec=min_sec, add_sec=3.0)
@@ -106,11 +104,11 @@ def get_pdf(driver, search_query, min_sec=2.0, max_retries=2):
                     return False
                 retries += 1
             else:
-                print(f"Éléments introuvables pour: {search_query} après {max_retries+1} tentatives")
+                print(f"Elements not found for: {search_query} after {max_retries+1} try")
                 return False
                 
         except Exception as e:
-            print(f"Erreur lors de la recherche pour {search_query}: {str(e)}")
+            print(f"Error while searching for {search_query}: {str(e)}")
             # Si c'est une erreur de session, on retourne immédiatement False
             if "invalid session id" in str(e).lower():
                 return False
@@ -131,7 +129,7 @@ def get_pdf(driver, search_query, min_sec=2.0, max_retries=2):
 
 
 def get_new_pdf_name(storage_path, done_files):
-    """Identifie le nouveau fichier PDF téléchargé."""
+    """Identify newly downloaded PDF."""
     new_done_files = os.listdir(storage_path)
     new_files = list(set(new_done_files) - set(done_files))
 
@@ -141,18 +139,18 @@ def get_new_pdf_name(storage_path, done_files):
 
 
 def check_unfinished_download(storage_path):
-    """Vérifie s'il y a des téléchargements en cours."""
+    """Check if there is an unfinished download."""
     return [
         file_name for file_name in os.listdir(storage_path) if file_name.endswith(".crdownload")
     ]
 
 
 def manage_unfinished_download(storage_path):
-    """Gère les téléchargements inachevés."""
+    """Manage unfinished downloads."""
     unfinished_download_files = check_unfinished_download(storage_path)
 
     if unfinished_download_files:
-        # Pause plus courte pour les téléchargements incomplets
+        # Short pause for unfinished downloads
         pause(min_sec=10.0, add_sec=10.0)  # 10-20 secondes au lieu de 60
 
     unfinished_download_files = check_unfinished_download(storage_path)
@@ -170,12 +168,13 @@ def manage_unfinished_download(storage_path):
 
 
 def read_inn_list(file_path):
-    """Lit la liste des INN à partir d'un fichier CSV."""
+    """Read CSV with INN."""
     import csv
     inn_list = []
     
     with open(file_path, 'r', encoding='utf-8') as f:
-        # Détecter le délimiteur automatiquement
+        # Check delimiter
+        # todo is an overkill feature, should use standartized CSV and not need if a propper DB 
         sniffer = csv.Sniffer()
         dialect = sniffer.sniff(f.read(1024))
         f.seek(0)
@@ -212,11 +211,11 @@ def read_inn_list(file_path):
         for row_num, row in enumerate(csv_reader, 1):
             if row and len(row) > inn_col_index:
                 inn = row[inn_col_index].strip().replace('"', '')
-                # Vérifier que c'est un nombre valide d'au moins 10 chiffres (format INN russe)
-                if inn and inn.isdigit() and len(inn) >= 10:
+                # Check if this is at least 10 digits  (format of Russian INN)
+                if inn and inn.isdigit() and len(inn) == 10:
                     inn_list.append(inn)
                 elif inn:
-                    print(f"INN non valide à la ligne {row_num}: '{inn}' (ne contient pas que des chiffres ou trop court)")
+                    print(f"INN not valid at lign {row_num}: '{inn}' (not only numbers or not correct length)")
     
     print(f"Nombre total d'INN trouvés: {len(inn_list)}")
     
