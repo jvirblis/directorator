@@ -357,7 +357,226 @@ def download_pdf_for_entity(driver, result_elem, storage_path, entity_name, inn,
         return None
 
 
-def search_and_extract_results(driver, search_query, max_records=500, storage_path=None, download_pdfs=False, min_sec=2.0, max_retries=2):
+def select_region(driver, region_codes, min_sec=2.0, max_retries=3):
+    """
+    Sélectionne une ou plusieurs régions dans le menu de filtre modal.
+    
+    Args:
+        driver: Le driver Selenium
+        region_codes: Code(s) de région(s) - peut être une string ("77") ou plusieurs séparées par virgule ("77,78,50")
+        min_sec: Temps de pause minimum
+        max_retries: Nombre de tentatives
+        
+    Returns:
+        bool: True si au moins une sélection a réussi, False sinon
+    """
+    try:
+        # Convertir region_codes en liste si c'est une string avec virgules
+        if isinstance(region_codes, str):
+            if ',' in region_codes:
+                codes_list = [code.strip() for code in region_codes.split(',')]
+            else:
+                codes_list = [region_codes.strip()]
+        else:
+            codes_list = [str(region_codes)]
+        
+        print(f"Sélection de {len(codes_list)} région(s): {', '.join(codes_list)}")
+        
+        # Étape 1: Cliquer sur le texte "Выберите значения из справочника" pour ouvrir le modal
+        try:
+            region_selector = driver.find_element(By.XPATH, "//span[contains(text(), 'Выберите значения из справочника')]")
+            region_selector.click()
+            pause(min_sec=2.0, add_sec=1.0)
+            print("Modal ouvert")
+        except Exception as e:
+            print(f"Erreur lors de l'ouverture du modal: {str(e)}")
+            try:
+                alternative = driver.find_element(By.CSS_SELECTOR, "#uni_set_1 li.no-data")
+                alternative.click()
+                pause(min_sec=2.0, add_sec=1.0)
+                print("Modal ouvert (alternative)")
+            except:
+                return False
+        
+        # Étape 2: Vérifier si on est dans un iframe
+        try:
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            if iframes:
+                print(f"Détecté {len(iframes)} iframe(s), tentative de basculement...")
+                for i, iframe in enumerate(iframes):
+                    try:
+                        driver.switch_to.frame(iframe)
+                        print(f"Basculé vers iframe {i}")
+                        break
+                    except:
+                        continue
+        except:
+            pass
+        
+        # Étape 3: Attendre que le modal soit chargé
+        pause(min_sec=1.0, add_sec=0.5)
+        
+        # Étape 4: Sélectionner chaque région
+        regions_selected = 0
+        
+        for region_code in codes_list:
+            print(f"\n► Recherche de la région '{region_code}'...")
+            
+            # Liste de toutes les méthodes à essayer
+            search_methods = [
+                (By.XPATH, f"//*[starts-with(text(), '{region_code} -')]", "starts-with"),
+                (By.XPATH, f"//*[contains(text(), '{region_code} - ')]", "contains avec espace"),
+                (By.XPATH, f"//*[contains(text(), '{region_code} -')]", "contains sans espace"),
+                (By.XPATH, f"//label[starts-with(text(), '{region_code} -')]", "label starts-with"),
+                (By.XPATH, f"//label[contains(text(), '{region_code} -')]", "label contains"),
+                (By.XPATH, f"//span[contains(text(), '{region_code} -')]", "span contains"),
+                (By.XPATH, f"//div[contains(text(), '{region_code} -')]", "div contains"),
+            ]
+            
+            region_found = False
+            region_element = None
+            
+            for by_method, selector, method_name in search_methods:
+                try:
+                    elements = driver.find_elements(by_method, selector)
+                    if elements:
+                        for elem in elements:
+                            if elem.is_displayed():
+                                region_element = elem
+                                print(f"  ✓ Région trouvée ({method_name}): {elem.text}")
+                                region_found = True
+                                break
+                    if region_found:
+                        break
+                except:
+                    continue
+            
+            if not region_found:
+                print(f"  ❌ Région {region_code} non trouvée, passage à la suivante")
+                continue
+            
+            # Cliquer sur la région
+            try:
+                driver.execute_script("arguments[0].scrollIntoView(true);", region_element)
+                pause(min_sec=0.3, add_sec=0.2)
+                region_element.click()
+                print(f"  ✓ Région {region_code} sélectionnée")
+                regions_selected += 1
+                pause(min_sec=0.3, add_sec=0.2)
+            except Exception as e:
+                print(f"  ❌ Erreur lors du clic sur {region_code}: {str(e)}")
+                try:
+                    driver.execute_script("arguments[0].click();", region_element)
+                    print(f"  ✓ Région {region_code} sélectionnée (via JavaScript)")
+                    regions_selected += 1
+                except:
+                    print(f"  ❌ Impossible de cliquer sur {region_code}")
+                    continue
+        
+        # Vérifier qu'au moins une région a été sélectionnée
+        if regions_selected == 0:
+            print(f"\n❌ Aucune région n'a pu être sélectionnée")
+            try:
+                screenshot_path = f"/tmp/region_modal_failed.png"
+                driver.save_screenshot(screenshot_path)
+                print(f"Capture d'écran: {screenshot_path}")
+            except:
+                pass
+            return False
+        
+        print(f"\n✓ {regions_selected}/{len(codes_list)} région(s) sélectionnée(s)")
+        
+        # Étape 5: Cliquer sur le bouton OK
+        try:
+            print("Recherche du bouton OK...")
+            pause(min_sec=0.5, add_sec=0.5)
+            
+            ok_button = None
+            ok_selectors = [
+                "button#btn_ok",
+                "button.btn-ok",
+                "button[type='submit']",
+                "//button[text()='OK']",
+                "//button[contains(text(), 'OK')]"
+            ]
+            
+            for selector in ok_selectors:
+                try:
+                    if selector.startswith("//"):
+                        ok_button = driver.find_element(By.XPATH, selector)
+                    else:
+                        ok_button = driver.find_element(By.CSS_SELECTOR, selector)
+                    print(f"Bouton OK trouvé avec: {selector}")
+                    break
+                except:
+                    continue
+            
+            if not ok_button:
+                print("❌ Bouton OK non trouvé")
+                return False
+            
+            ok_button.click()
+            pause(min_sec=1.0, add_sec=1.0)
+            print(f"✓ Bouton OK cliqué - {regions_selected} région(s) confirmée(s)")
+        except Exception as e:
+            print(f"❌ Erreur lors du clic sur OK: {str(e)}")
+            return False
+        
+        # Étape 6: Revenir au contexte principal
+        try:
+            driver.switch_to.default_content()
+            print("Retour au contexte principal")
+        except:
+            pass
+        
+        # Étape 7: Vérifier les régions affichées
+        try:
+            selected_regions = driver.find_elements(By.CSS_SELECTOR, "#uni_set_1 li span")
+            displayed = [elem.text for elem in selected_regions if elem.text and "Выберите" not in elem.text]
+            if displayed:
+                print(f"✓✓ Région(s) confirmée(s): {', '.join(displayed)}")
+        except:
+            pass
+        
+        print(f"✓ Sélection de région(s) terminée avec succès\n")
+        return True
+            
+    except Exception as e:
+        print(f"❌ Erreur générale lors de la sélection des régions: {str(e)}")
+        traceback.print_exc()
+        try:
+            driver.switch_to.default_content()
+        except:
+            pass
+        return False
+
+
+
+def clear_region_filter(driver):
+    """
+    Efface le filtre de région en cliquant sur le bouton X (croix).
+    
+    Args:
+        driver: Le driver Selenium
+        
+    Returns:
+        bool: True si réussi, False sinon
+    """
+    try:
+        # Chercher le bouton X (croix) à droite de la région sélectionnée
+        # Visible dans l'image 3: une croix bleue à droite de "77 - МОСКВА Г"
+        clear_button = driver.find_element(By.CSS_SELECTOR, "#uni_set_0 .uni-set-delete, #uni_set_0 [class*='delete'], #uni_set_0 button[title*='Удалить']")
+        clear_button.click()
+        pause(min_sec=0.5, add_sec=0.5)
+        print("Filtre de région effacé")
+        return True
+        
+    except Exception as e:
+        print(f"Erreur lors de l'effacement du filtre de région: {str(e)}")
+        return False
+
+
+def search_and_extract_results(driver, search_query, max_records=500, storage_path=None, download_pdfs=False, region_code=None, min_sec=2.0, max_retries=2):
     """
     Recherche et extrait toutes les données des résultats avec pagination.
     
@@ -365,6 +584,7 @@ def search_and_extract_results(driver, search_query, max_records=500, storage_pa
         max_records: Nombre maximum d'enregistrements à collecter par requête
         storage_path: Chemin pour stocker les PDFs (requis si download_pdfs=True)
         download_pdfs: Si True, télécharge les PDFs pour les entités non liquidées
+        region_code: Code de région (non utilisé ici, la région est sélectionnée une seule fois au début)
     
     Returns:
         tuple: (list de dict pour personnes morales, list de dict pour entrepreneurs individuels)
@@ -373,6 +593,8 @@ def search_and_extract_results(driver, search_query, max_records=500, storage_pa
     retries = 0
     while retries <= max_retries:
         try:
+            # La région est déjà sélectionnée au début, pas besoin de la resélectionner
+            
             search = driver.find_element(By.ID, "query")
             search.clear()
             search.send_keys(search_query)
@@ -442,7 +664,8 @@ def search_and_extract_results(driver, search_query, max_records=500, storage_pa
                             page_entrepreneurs.append({
                                 'search_query': search_query,
                                 'entity_name': entity_name,
-                                'full_text': res_text
+                                'full_text': res_text,
+                                'collected_at': time.strftime("%Y-%m-%d %H:%M:%S")
                             })
                         else:
                             # Extraire les données structurées pour les personnes morales
@@ -450,6 +673,7 @@ def search_and_extract_results(driver, search_query, max_records=500, storage_pa
                             if extracted_data:  # Devrait toujours être non-None ici
                                 extracted_data['search_query'] = search_query
                                 extracted_data['entity_name'] = entity_name
+                                extracted_data['collected_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
                                 
                                 # Télécharger le PDF si demandé et si l'entité n'est pas liquidée
                                 pdf_filename = ''
@@ -559,7 +783,7 @@ def read_search_queries(file_path, column_index=0):
 
 def write_results_to_csv(results, output_file):
     """Écrit les résultats des personnes morales dans un fichier CSV."""
-    fieldnames = ['search_query', 'entity_name', 'full_text', 'region', 'ogrn', 'inn', 'head_name', 'status', 'stop_date', 'pdf_file']
+    fieldnames = ['search_query', 'entity_name', 'full_text', 'region', 'ogrn', 'inn', 'head_name', 'status', 'stop_date', 'pdf_file', 'collected_at']
     
     with open(output_file, 'w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -571,7 +795,7 @@ def write_results_to_csv(results, output_file):
 
 def write_entrepreneurs_to_csv(entrepreneurs, output_file):
     """Écrit les résultats des entrepreneurs individuels dans un fichier CSV simple."""
-    fieldnames = ['search_query', 'entity_name', 'full_text']
+    fieldnames = ['search_query', 'entity_name', 'full_text', 'collected_at']
     
     with open(output_file, 'w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -587,6 +811,7 @@ def main():
     parser.add_argument('--output-file', default='egrul_results.csv', help='Fichier CSV de sortie pour les personnes morales')
     parser.add_argument('--entrepreneurs-file', default='egrul_entrepreneurs.csv', help='Fichier CSV de sortie pour les entrepreneurs individuels')
     parser.add_argument('--max-records', type=int, default=500, help='Nombre maximum d\'enregistrements à collecter par requête (défaut: 500)')
+    parser.add_argument('--region', type=str, default=None, help='Code(s) de région pour filtrer les résultats - une seule (ex: "77") ou plusieurs séparées par virgule (ex: "77,78,50")')
     parser.add_argument('--download-pdfs', action='store_true', help='Télécharger les PDFs pour les entités non liquidées')
     parser.add_argument('--pdf-dir', default='pdfs', help='Répertoire de sortie pour les PDF téléchargés (défaut: pdfs)')
     parser.add_argument('--chromedriver-path', default=None, 
@@ -652,6 +877,15 @@ def main():
         driver.quit()
         return
 
+    # IMPORTANT: Sélectionner la région AVANT toute recherche si spécifiée
+    if args.region:
+        print(f"\n=== SÉLECTION DE LA RÉGION {args.region} ===")
+        region_selected = select_region(driver, args.region, min_sec=2.0)
+        if region_selected:
+            print(f"✓ Région {args.region} configurée avec succès\n")
+        else:
+            print(f"⚠ Échec de la sélection de la région {args.region}, continuation sans filtre régional\n")
+
     all_legal_entities = []
     all_entrepreneurs = []
     success_count = 0
@@ -673,7 +907,8 @@ def main():
                         driver, query, 
                         max_records=args.max_records, 
                         storage_path=storage_path, 
-                        download_pdfs=args.download_pdfs
+                        download_pdfs=args.download_pdfs,
+                        region_code=args.region
                     )
                     if legal_entities is None and entrepreneurs is None:
                         # Erreur de session, essayer de récupérer
@@ -684,7 +919,8 @@ def main():
                                 driver, query, 
                                 max_records=args.max_records, 
                                 storage_path=storage_path, 
-                                download_pdfs=args.download_pdfs
+                                download_pdfs=args.download_pdfs,
+                                region_code=args.region
                             )
                         
                     if legal_entities is None and entrepreneurs is None:
@@ -710,7 +946,8 @@ def main():
                             driver, query, 
                             max_records=args.max_records, 
                             storage_path=storage_path, 
-                            download_pdfs=args.download_pdfs, 
+                            download_pdfs=args.download_pdfs,
+                            region_code=args.region,
                             min_sec=2.0
                         )
                         if legal_entities or entrepreneurs:
